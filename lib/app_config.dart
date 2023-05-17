@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'dart:async';
 
+import 'package:app_config/android_app_package_rename.dart';
+import 'package:app_config/files_path.dart';
 import 'package:cli_util/cli_logging.dart';
 import 'package:args/args.dart';
 import 'package:process_run/process_run.dart';
@@ -40,11 +42,11 @@ class AppConfig {
 # pub get
 flutter pub get
 
-# Update native splash
-flutter pub run flutter_native_splash:create --path=${file.path}
-
-# Update app icons
-flutter pub run flutter_launcher_icons -f $fileName
+// # Update native splash
+// flutter pub run flutter_native_splash:create --path=${file.path}
+//
+// # Update app icons
+// flutter pub run flutter_launcher_icons -f $fileName
 ''');
 
     final String yamlFileContent = await file.readAsString();
@@ -74,15 +76,15 @@ flutter pub run flutter_launcher_icons -f $fileName
 
     await writeParticularFile(
       filePath: "android/app/src/main/AndroidManifest.xml",
-      key: 'android:label="',
-      newValue: newAppName.trim(),
+      rgxSource: r'android:label=".*"',
+      replacement: 'android:label="${newAppName.trim()}"',
     );
 
     logger.stdout('Change app name in iOS.');
 
     await _changeAppNameInfoPlist(
       keyName: "CFBundleName",
-      newValue: newAppName.trim(),
+      replacement: newAppName.trim(),
     );
   }
 
@@ -96,16 +98,26 @@ flutter pub run flutter_launcher_icons -f $fileName
 
     logger.stdout('Change app package name in android.');
 
-    await writeParticularFile(
-      filePath: "android/app/src/main/AndroidManifest.xml",
-      key: 'package="',
-      newValue: newAppPackageName.trim(),
-    );
+    for (var path in [
+      FilesPath.manifestMainPath,
+      FilesPath.manifestDebugPath,
+      FilesPath.manifestProfilePath
+    ]) {
+      await writeParticularFile(
+        filePath: path,
+        rgxSource: r'package=.*>',
+        replacement: 'package="${newAppPackageName.trim()}">',
+      );
+    }
+
+    AndroidRenameSteps(
+      newPackageName: newAppPackageName,
+    ).updateMainActivity();
 
     await writeParticularFile(
-      filePath: "android/app/build.gradle",
-      key: 'applicationId "',
-      newValue: newAppPackageName,
+      filePath: FilesPath.buildGradlePath,
+      rgxSource: r'applicationId ".*"',
+      replacement: 'applicationId "$newAppPackageName"',
     );
   }
 
@@ -119,38 +131,40 @@ flutter pub run flutter_launcher_icons -f $fileName
 
     logger.stdout('Change bundle identifier in iOS.');
 
-    _changeBundleIdentifierInProjectFile(newBundleIdentifier.trim());
+    await writeParticularFile(
+      filePath: FilesPath.iOSProjectPath,
+      rgxSource: r'PRODUCT_BUNDLE_IDENTIFIER = +[\w]+.+[\w]+.+[\w]+;',
+      replacement: 'PRODUCT_BUNDLE_IDENTIFIER = $newBundleIdentifier;',
+    );
   }
 
   Future<void> writeParticularFile({
     required String filePath,
-    required String key,
-    required String newValue,
+    required String rgxSource,
+    required String replacement,
   }) async {
     final File file = File(filePath);
     final bool fileIsExists = file.existsSync();
 
     if (fileIsExists) {
       String fileContent = await file.readAsString();
-      final indexOfAppLabelStr = fileContent.indexOf(key);
-      final allFileAfterAppLabel = fileContent.substring(
-        indexOfAppLabelStr + key.length,
-      );
 
-      final indexOfEndOfAppNameDoubleQuote = allFileAfterAppLabel.indexOf('"');
-      final String appPackageName =
-          allFileAfterAppLabel.substring(0, indexOfEndOfAppNameDoubleQuote);
-      fileContent =
-          fileContent.replaceFirst('$key$appPackageName"', '$key$newValue"');
+      RegExp regExp79 = RegExp(rgxSource);
+      var matches = regExp79.allMatches(fileContent).toList();
+
+      if (matches.isEmpty) return;
+      String matchStr = fileContent.substring(matches[0].start, matches[0].end);
+
+      fileContent = fileContent.replaceAll(matchStr, replacement);
       await file.writeAsString(fileContent);
     }
   }
 
   Future<void> _changeAppNameInfoPlist({
     required String keyName,
-    required String newValue,
+    required String replacement,
   }) async {
-    final File file = File('ios/Runner/Info.plist');
+    final File file = File(FilesPath.infoPlistPath);
     final bool infoPlistFileExist = file.existsSync();
 
     if (infoPlistFileExist) {
@@ -173,28 +187,9 @@ flutter pub run flutter_launcher_icons -f $fileName
       );
       fileContent = fileContent.replaceFirst(
         '$stringOpenTag$appPackageName$stringEndTag',
-        '$stringOpenTag$newValue$stringEndTag',
+        '$stringOpenTag$replacement$stringEndTag',
       );
 
-      await file.writeAsString(fileContent);
-    }
-  }
-
-  Future<void> _changeBundleIdentifierInProjectFile(String newBundleId) async {
-    final File file = File('ios/Runner.xcodeproj/project.pbxproj');
-    final bool fileIsExist = file.existsSync();
-
-    if (fileIsExist) {
-      String fileContent = await file.readAsString();
-      RegExp regExp79 =
-          RegExp(r'PRODUCT_BUNDLE_IDENTIFIER = +[\w]+.+[\w]+.+[\w]+;');
-      var matches = regExp79.allMatches(fileContent).toList();
-
-      String matchStr = fileContent.substring(matches[0].start, matches[0].end);
-      fileContent = fileContent.replaceAll(
-        matchStr,
-        'PRODUCT_BUNDLE_IDENTIFIER = $newBundleId;',
-      );
       await file.writeAsString(fileContent);
     }
   }
